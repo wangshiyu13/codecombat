@@ -26,6 +26,7 @@ const utils = require('core/utils')
 const api = require('core/api')
 const NameLoader = require('core/NameLoader')
 const momentTimezone = require('moment-timezone')
+const OnlineTeacherSchema = require('schemas/models/online_teacher')
 const { LICENSE_PRESETS, ESPORTS_PRODUCT_STATS } = require('core/constants')
 
 // TODO: the updateAdministratedTeachers method could be moved to an afterRender lifecycle method.
@@ -40,8 +41,11 @@ module.exports = (AdministerUserModal = (function () {
       this.prototype.events = {
         'click #save-changes': 'onClickSaveChanges',
         'click #create-payment-btn': 'onClickCreatePayment',
+        'click #add-credits-btn': 'onClickAddCreditsButton',
         'click #add-seats-btn': 'onClickAddSeatsButton',
         'click #add-esports-product-btn': 'onClickAddEsportsProductButton',
+        'click #add-call-sales-product-btn': 'onClickAddCallSalesProductButton',
+        'click #save-online-teacher-info': 'onClickSaveOnlineTeacherInfo',
         'click #user-spy-btn': 'onClickUserSpyButton',
         'click #destudent-btn': 'onClickDestudentButton',
         'click #deteacher-btn': 'onClickDeteacherButton',
@@ -60,6 +64,7 @@ module.exports = (AdministerUserModal = (function () {
         'click #online-teacher-checkbox': 'onClickOnlineTeacherCheckbox',
         'click #beta-tester-checkbox': 'onClickBetaTesterCheckbox',
         'click #edit-school-admins-link': 'onClickEditSchoolAdmins',
+        'click #edit-online-teacher-link': 'onClickEditOnlineTeacher',
         'submit #teacher-search-form': 'onSubmitTeacherSearchForm',
         'click .add-administer-teacher': 'onClickAddAdministeredTeacher',
         'click #clear-teacher-search-button': 'onClearTeacherSearchResults',
@@ -82,6 +87,8 @@ module.exports = (AdministerUserModal = (function () {
       }
       options.models = [user]
       super(options)
+      this.onlineTeacherSchema = OnlineTeacherSchema
+      this.DAYS_OF_WEEK = OnlineTeacherSchema.properties.schedule.items.properties.day.enum
       this.onSearchRequestSuccess = this.onSearchRequestSuccess.bind(this)
       this.onSearchRequestFailure = this.onSearchRequestFailure.bind(this)
       this.userHandle = userHandle
@@ -97,7 +104,9 @@ module.exports = (AdministerUserModal = (function () {
           this.supermodel.trackRequest(this.classrooms.fetchByOwner(this.userHandle))
         }
         this.esportsProducts = this.user.getProductsByType('esports')
-        return this.renderSelectors('#esports-products')
+        this.renderSelectors('#esports-products')
+        this.callSalesProducts = this.user.getProductsByType('call-sales')
+        this.renderSelectors('#call-sales-products')
       })
       this.coupons = new StripeCoupons()
       if (me.isAdmin()) { this.supermodel.trackRequest(this.coupons.fetch({ cache: false })) }
@@ -112,9 +121,11 @@ module.exports = (AdministerUserModal = (function () {
         })
       })
       this.esportsProducts = this.user.getProductsByType('esports')
+      this.callSalesProducts = this.user.getProductsByType('call-sales')
       this.trialRequests = new TrialRequests()
       if (me.isAdmin()) { this.supermodel.trackRequest(this.trialRequests.fetchByApplicant(this.userHandle)) }
       this.timeZone = features?.chinaInfra ? 'Asia/Shanghai' : 'America/Los_Angeles'
+      this.userTimeZone = utils.getUserTimeZone(this.user)
       this.licenseType = 'all'
       this.licensePresets = LICENSE_PRESETS
       this.esportsType = 'basic'
@@ -228,6 +239,43 @@ module.exports = (AdministerUserModal = (function () {
       return this.user.patch(options)
     }
 
+    onClickAddCreditsButton () {
+      const attrs = forms.formToObject(this.$('#credit-form'))
+      const creditType = this.$el.find('#credit-type-select').val()
+
+      attrs.credits = parseInt(attrs.credits)
+      if (!(attrs.credits > 0)) { return }
+      if (!attrs.endDate) { return }
+      if (!creditType) { return }
+      attrs.endDate = attrs.endDate + ' ' + '23:59'
+      attrs.endDate = momentTimezone.tz(attrs.endDate, this.timeZone).toISOString()
+
+      this.state = 'creating-credits'
+      this.renderSelectors('#credit-form')
+      api.userCredits.addCredits({
+        operation: creditType,
+        credits: attrs.credits,
+        endDate: attrs.endDate,
+        userId: this.user.id
+      }).then(res => {
+        this.state = 'made-credits'
+        this.renderSelectors('#credit-form')
+        return setTimeout(() => {
+          this.state = ''
+          return this.renderSelectors('#credit-form')
+        }, 1000)
+      }).catch(jqxhr => {
+        this.state = ''
+        this.renderSelectors('#credit-form')
+        const errorString = 'There was an error adding the credits. See the console.'
+        console.error(errorString, jqxhr)
+        noty({
+          text: errorString,
+          type: 'error'
+        })
+      })
+    }
+
     onClickAddSeatsButton () {
       const attrs = forms.formToObject(this.$('#prepaid-form'))
       attrs.maxRedeemers = parseInt(attrs.maxRedeemers)
@@ -235,11 +283,9 @@ module.exports = (AdministerUserModal = (function () {
       if (!(attrs.maxRedeemers > 0)) { return }
       if (!attrs.endDate || !attrs.startDate || !(attrs.endDate > attrs.startDate)) { return }
       attrs.endDate = attrs.endDate + ' ' + '23:59' // Otherwise, it ends at 12 am by default which does not include the date indicated
-      let {
-        timeZone
-      } = this
+      let timeZone = this.timeZone
       if (attrs.userTimeZone?.[0] === 'on') {
-        timeZone = this.getUserTimeZone()
+        timeZone = this.userTimeZone
       }
       attrs.startDate = momentTimezone.tz(attrs.startDate, timeZone).toISOString()
       attrs.endDate = momentTimezone.tz(attrs.endDate, timeZone).toISOString()
@@ -270,6 +316,55 @@ module.exports = (AdministerUserModal = (function () {
         return setTimeout(() => {
           this.state = ''
           return this.renderSelectors('#prepaid-form')
+        }
+        , 1000)
+      })
+    }
+
+    onClickAddCallSalesProductButton () {
+      const attrs = forms.formToObject(this.$('#call-sales-product-form'))
+
+      if (!_.all(_.values(attrs))) { return }
+      if (!attrs.endDate || !attrs.startDate || !(attrs.endDate > attrs.startDate)) {
+        window.noty({
+          text: 'End date must be after start date',
+          type: 'error',
+        })
+        return
+      }
+      attrs.endDate = attrs.endDate + ' ' + '23:59' // Otherwise, it ends at 12 am by default which does not include the date indicated
+
+      attrs.startDate = momentTimezone.tz(attrs.startDate, this.timeZone).toISOString()
+      attrs.endDate = momentTimezone.tz(attrs.endDate, this.timeZone).toISOString()
+      attrs.productOptions = { id: _.uniqueId() }
+
+      _.extend(attrs, {
+        product: 'call-sales',
+        purchaser: me.id,
+        recipient: this.user.id,
+        paymentService: 'external',
+        paymentDetails: {
+          adminAdded: me.id,
+        },
+      })
+      this.state = 'creating-call-sales-product'
+      this.renderSelectors('#call-sales-product-form')
+      $('#call-sales-product-form').addClass('in')
+      api.users.putUserProducts({
+        user: this.user.id,
+        product: attrs,
+        kind: 'new',
+      }).then(res => {
+        this.state = 'made-call-sales-product'
+        this.renderSelectors('#call-sales-product-form')
+        $('#call-sales-product-form').addClass('in')
+        this.callSalesProducts.push(attrs)
+        this.renderSelectors('#call-sales-product-table')
+        $('#call-sales-product-table').addClass('in')
+        return setTimeout(() => {
+          this.state = ''
+          this.renderSelectors('#call-sales-product-form')
+          return $('#call-sales-product-form').addClass('in')
         }
         , 1000)
       })
@@ -332,6 +427,90 @@ module.exports = (AdministerUserModal = (function () {
           return $('#esports-product-form').addClass('in')
         }
         , 1000)
+      })
+    }
+
+    onClickSaveOnlineTeacherInfo () {
+      const attrs = forms.formToObject(this.$('#online-teacher-info'))
+      const parsedAttrs = _.pick(attrs, ['languages', 'products', 'googleCalendarId'])
+      if (attrs.trialsOnly.length) {
+        parsedAttrs.trialsOnly = true
+      }
+      parsedAttrs.schedule = []
+      parsedAttrs.codeLanguages = []
+
+      const schedule = {}
+      for (const day of this.DAYS_OF_WEEK) {
+        schedule[day] = new Set()
+      }
+
+      // this offsets is server_tz - user_tz
+      const getOffsets = () => {
+        const now = momentTimezone().utc()
+        const userTz = momentTimezone.tz.zone(this.userTimeZone).utcOffset(now)
+        const serverTz = momentTimezone.tz.zone(this.timeZone).utcOffset(now)
+        return (userTz - serverTz) / 60 // in hours
+      }
+      const tzOffset = getOffsets()
+      for (const key in attrs) {
+        if (!key.includes('.')) {
+          continue
+        }
+        const [prefix, suffix] = key.split('.')
+        if (suffix === 'time') {
+          const times = attrs[key].split(',')
+          const time = times.map(t => {
+            let [start, end] = t.split('-').map(t => parseInt(t))
+            if (!end) {
+              end = start
+            }
+            return Array.from({ length: end - start + 1 }, (_, a) => a + start)
+          }).flat()
+
+          // handle timezone
+          if (attrs.userTimeZone?.[0] === 'on') {
+            Array.from(time).forEach(t => {
+              const serverTime = t + tzOffset
+              if (serverTime < 0) {
+                const index = (this.DAYS_OF_WEEK.indexOf(prefix) + 7 - 1) % 7
+                const day = this.DAYS_OF_WEEK[index]
+                const newT = serverTime + 24
+                schedule[day].add(newT)
+              } else if (serverTime >= 24) {
+                const index = (this.DAYS_OF_WEEK.indexOf(prefix) + 1) % 7
+                const day = this.DAYS_OF_WEEK[index]
+                const newT = serverTime - 24
+                schedule[day].add(newT)
+              } else {
+                schedule[prefix].add(serverTime)
+              }
+            })
+          } else {
+            schedule[prefix] = new Set(time)
+          }
+          Object.keys(schedule).forEach(day => {
+            if (schedule[day].size) {
+              parsedAttrs.schedule.push({
+                day,
+                time: Array.from(schedule[day])
+              })
+            }
+          })
+        } else if (suffix === 'level') {
+          if (attrs[key].length === 0) {
+            continue
+          }
+          parsedAttrs.codeLanguages.push({
+            language: prefix,
+            level: attrs[key].map(l => parseInt(l))
+          })
+        } else {
+          console.warn('Unknown key', key)
+        }
+      }
+      api.admin.putOnlineTeacherInfo(this.onlineTeacherInfo._id, parsedAttrs).then(res => {
+        this.editingOnlineTeacher = false
+        this.render()
       })
     }
 
@@ -499,13 +678,23 @@ module.exports = (AdministerUserModal = (function () {
 
     onClickSaveProductInfo (e) {
       const productId = '' + this.$(e.target).data('product-id') // make sure it is string
+      const productType = '' + this.$(e.target).data('product-type')
+
       const productStartDate = this.$el.find('#product-startDate-' + productId).val()
       const productEndDate = this.$el.find('#product-endDate-' + productId).val()
-      const tournaments = this.$el.find('#product-tournaments-' + productId).val()
-      const teams = this.$el.find('#product-teams-' + productId).val()
-      const arenas = this.$el.find('#product-arenas-' + productId).val()
 
-      return this.esportsProducts.forEach((product, i) => {
+      let products
+      switch (productType) {
+        case 'esports':
+          products = this.esportsProducts
+          break
+        case 'call-sales':
+          products = this.callSalesProducts
+          break
+        default:
+          return
+      }
+      return products.forEach((product, i) => {
         if (product.productOptions.id === productId) {
           // validations
           if (!productStartDate || !productEndDate) {
@@ -517,9 +706,15 @@ module.exports = (AdministerUserModal = (function () {
           }
           product.startDate = momentTimezone.tz(productStartDate, this.timeZone).toISOString()
           product.endDate = momentTimezone.tz(productEndDate, this.timeZone).toISOString()
-          product.productOptions.teams = parseInt(teams)
-          product.productOptions.tournaments = parseInt(tournaments)
-          product.productOptions.arenas = arenas
+
+          if (productType === 'esports') {
+            const tournaments = this.$el.find('#product-tournaments-' + productId).val()
+            const teams = this.$el.find('#product-teams-' + productId).val()
+            const arenas = this.$el.find('#product-arenas-' + productId).val()
+            product.productOptions.teams = parseInt(teams)
+            product.productOptions.tournaments = parseInt(tournaments)
+            product.productOptions.arenas = arenas
+          }
           return api.users.putUserProducts({
             user: this.user.id,
             product,
@@ -589,6 +784,23 @@ module.exports = (AdministerUserModal = (function () {
         return this.user.fetch({ cache: false }).then(() => this.render())
       })
       return true
+    }
+
+    onClickEditOnlineTeacher (e) {
+      if (typeof this.editingOnlineTeacher === 'undefined') {
+        api.admin.fetchOnlineTeacherInfo(this.user.id).then(info => {
+          this.onlineTeacherInfo = info.data
+          this.renderSelectors('#online-teacher-info')
+        }).catch(jqxhr => {
+          const errorString = 'There was an error getting existing onlineTeacherInfo, see the console'
+          this.userSaveState = errorString
+          this.render()
+          return console.error(errorString, jqxhr)
+        })
+      }
+
+      this.editingOnlineTeacher = !this.editingOnlineTeacher
+      return this.render()
     }
 
     onClickEditSchoolAdmins (e) {
@@ -796,15 +1008,6 @@ ${teachers.join('\n')} \
       this.user.set('volume', val)
       this.user.patch()
       return this.modelTreemas[this.user.id].set('volume', val)
-    }
-
-    getUserTimeZone () {
-      const geo = this.user.get('geo')
-      if (geo?.timeZone) {
-        return geo.timeZone
-      } else {
-        return this.timeZone
-      }
     }
   }
   AdministerUserModal.initClass()

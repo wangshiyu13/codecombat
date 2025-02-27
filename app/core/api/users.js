@@ -47,6 +47,14 @@ module.exports = {
     }))
   },
 
+  signupWithOAuth2 ({ userID, email, ...attrs }) {
+    return fetchJson(this.url(userID, 'signup-with-oauth2'), _.assign({}, {
+      method: 'POST',
+      credentials: 'include',
+      json: { email, ...attrs },
+    }))
+  },
+
   signupFromGoogleClassroom (attrs, options) {
     if (options == null) { options = {} }
     return fetchJson('/db/user/signup-from-google-classroom', _.assign({}, options, {
@@ -138,8 +146,8 @@ module.exports = {
     }))
   },
 
-  provisionSubscription ({ userId }) {
-    return fetchJson(`/db/user/${userId}/provision-subscription`, _.assign({}, {
+  extraProvisions ({ userId }) {
+    return fetchJson(`/db/user/${userId}/extra-provisions`, _.assign({}, {
       method: 'PUT'
     }))
   },
@@ -221,5 +229,8 @@ module.exports = {
     return fetchJson(`/db/user-credits/${operation}`, _.assign({}, {
       method: 'GET'
     }))
+  },
+  getLowUsageData (userId, options) {
+    return fetchJson(`/db/users/${userId}/low-usage-data`, options)
   }
 }

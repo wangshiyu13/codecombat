@@ -1,18 +1,7 @@
-// TODO: This file was created by bulk-decaffeinate.
-// Sanity-check the conversion and remove this comment.
 const c = require('./../schemas')
 const { FeatureAuthoritySchema, FeatureRecipientSchema } = require('./feature.schema')
 
 const emailSubscriptions = ['announcement', 'tester', 'level_creator', 'developer', 'article_editor', 'translator', 'support', 'notification']
-
-/*
-SCHEMA WARNING
-
-Any changes made to this schema need to be shared on the Ozaria user schema.
-Both products share the same database collection and currently duplicating
-changes is how we can avoid validation errors as the user traverses between
-the two products.
-*/
 
 const UserSchema = c.object({
   title: 'User',
@@ -69,6 +58,18 @@ _.extend(UserSchema.properties, {
         id: { type: 'string', description: 'The service provider\'s id for the user' }
       }
     }
+  },
+  oAuth2Identities: {
+    description: 'List of OAuth2 identities this user has.',
+    type: 'array',
+    items: {
+      description: 'Reference to a single OAuth2 identity',
+      type: 'object',
+      properties: {
+        providerId: c.objectId(),
+        oAuth2IdentityId: c.objectId(),
+      },
+    },
   },
   clientCreator: c.objectId({ description: 'Client which created this user' }),
   clientPermissions: {
@@ -221,7 +222,8 @@ _.extend(UserSchema.properties, {
     behaviors: { type: 'boolean' },
     liveCompletion: { type: 'boolean' },
     screenReaderMode: { type: 'boolean' },
-    blocks: { type: 'boolean' }
+    codeFormat: { type: 'string', enum: ['blocks-icons', 'blocks-text', 'blocks-and-code', 'text-code'], description: 'Default code format option. Default if unset: text-code.' },
+    preferWideEditor: { type: 'boolean', description: 'Whether the user prefers a wide editor.' }
   }),
 
   simulatedBy: { type: 'integer', minimum: 0 },
@@ -246,7 +248,7 @@ _.extend(UserSchema.properties, {
 
   points: { type: 'number' },
   activity: { type: 'object', description: 'Summary statistics about user activity', additionalProperties: c.activity },
-  stats: c.object({ additionalProperties: false }, {
+  stats: c.object({ additionalProperties: true }, {
     gamesCompleted: c.int(),
     articleEdits: c.int(),
     levelEdits: c.int(),
@@ -413,6 +415,16 @@ _.extend(UserSchema.properties, {
   seenNewDashboardModal: { type: 'boolean', description: 'Whether the user has seen the new dashboard onboarding modal? Set to true after the modal is seen and closed by the user' }, // Ozaria
   closedNewTDGetStartedTooltip: { type: 'boolean', description: 'Whether the user has closed the get started tooltip in the new dashboard? Set to true once the user has dismissed the tooltip' }, // Ozaria
 
+  seenPromotions: {
+    type: 'object',
+    properties: {
+      'hackstack-beta-release-modal': [c.date(), { type: 'boolean' }],
+      'curriculum-sidebar-promotion-modal': [c.date(), { type: 'boolean' }],
+      'hp-junior-modal': [c.date(), { type: 'boolean' }],
+      'ai-league-tour': [c.date(), { type: 'boolean' }],
+    }
+  },
+
   features: {
     type: 'object',
     title: 'Feature Flags',
@@ -428,7 +440,14 @@ _.extend(UserSchema.properties, {
         description: 'Features flags applied to this user',
         // key is the feature id
         additionalProperties: FeatureRecipientSchema
-      }
+      },
+      isNewDashboardActive: {
+        type: 'boolean'
+      },
+      ownerDistrictId: c.objectId({ description: 'District ID where user has admin permission to view data like outcome reports' }),
+      syncedToSF: { type: 'boolean', description: 'Whether the user has been synced to Salesforce' },
+      syncedToCIO: { type: 'boolean', description: 'Whether the user has been synced to CIO' },
+      forceLogout: { type: 'boolean', description: 'Whether the user needs to be force logged out' },
     }
   },
 
@@ -436,7 +455,7 @@ _.extend(UserSchema.properties, {
   products: c.array({ title: 'Products purchased or used by this user' },
     c.object({ required: ['product', 'startDate', 'recipient', 'paymentService', 'paymentDetails'], additionalProperties: true }, {
       // ensure we can add additionalProperties
-      product: { type: 'string', enum: ['course', 'basic_subscription', 'pd', 'esports', 'online-classes'], decription: 'The "name" field for the product purchased' }, // And/or the ID of the Product in the database, if we make a Product for each thing we can buy?
+      product: { type: 'string', enum: ['course', 'basic_subscription', 'pd', 'esports', 'online-classes', 'call-sales'], description: 'The "name" field for the product purchased' }, // And/or the ID of the Product in the database, if we make a Product for each thing we can buy?
 
       prepaid: c.objectId({ links: [{ rel: 'db', href: '/db/prepaid/{($)}' }] }), // required for type: “course” for legacy compatibility, optional for other types, consider putting into productOptions
       productOptions: {
@@ -457,6 +476,9 @@ _.extend(UserSchema.properties, {
           c.object({}, { // online-classes
             event: c.objectId({ links: [{ rel: 'db', href: '/db/event/{($)}' }] }),
             count: { type: 'number' }
+          }),
+          c.object({}, { // call-sales
+            id: { type: 'string' },
           })
         ]
       },
